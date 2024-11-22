@@ -1,2 +1,2 @@
-# libProcMessages
+# libInterprocs
 Library of communications between processes.
