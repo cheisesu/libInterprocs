@@ -1,6 +1,9 @@
 import Foundation
 import Combine
 
+/// Communicator based on DistributedNotificationCenter.
+///
+/// - warning: Communications using this way are not secured.
 @available(iOS, unavailable)
 public class DistributedCommunicator {
     private let id: String
@@ -8,20 +11,26 @@ public class DistributedCommunicator {
     private let encoder: any CommunicatorEncoder
     private let decoder: any CommunicatorDecoder
     private var cancellables: Set<AnyCancellable> = []
+
     private var notificationObject: String? { id }
     private var sessionId: String { String(describing: ObjectIdentifier(self)) }
 
     /// Initializes communicator.
     /// - Parameter id: Identiifier used for filterring notifications.
-    /// - Parameter encoder: Encoder for objects.
-    /// - Parameter decoder: Decoder for object.
+    /// - Parameter encoder: Encoder for objects to send.
+    /// - Parameter decoder: Decoder for receved objects.
     public init(id: String, encoder: any CommunicatorEncoder = JSONEncoder(), decoder: any CommunicatorDecoder = JSONDecoder()) {
         self.id = id
-        center = DistributedNotificationCenter.default()
+        center = .default()
         self.encoder = encoder
         self.decoder = decoder
     }
 
+    /// Sends object with indicated key name.
+    /// - Parameters:
+    ///   - object: Instance of an object to send. It will be encoded using passed encoder to initializer.
+    ///   - key: Notification name.
+    /// - Returns: True if no error happened.
     @discardableResult
     public func send<Object: Encodable>(_ object: Object, with key: any NotificationKeyType) -> Bool {
         do {
@@ -39,8 +48,17 @@ public class DistributedCommunicator {
         }
     }
 
+    /// Subscribes on receiving notifications with passed name of concrete object type.
+    ///
+    /// If received object cannot be converted to provided type it will not call the handler.
+    /// - Parameters:
+    ///   - key: Notification name.
+    ///   - type: Type of content object.
+    ///   - handler: Handler of received notification.
     public func subscribe<Object: Decodable>(on key: any NotificationKeyType,
-                                             receive type: Object.Type, handler: @escaping (_ obj: Object) -> Void) {
+                                             receive type: Object.Type,
+                                             handler: @escaping (_ obj: Object) -> Void)
+    {
         let name = notificationName(for: key)
         center.publisher(for: name, object: notificationObject as NSString?)
             .sink { [weak self] notification in
