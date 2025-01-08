@@ -1,0 +1,25 @@
+{
+  "configurations" : [
+    {
+      "id" : "D802F6BC-2107-40D6-8E5F-D4967C75E2A5",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : true,
+      "target" : {
+        "containerPath" : "container:",
+        "identifier" : "InterprocsTests",
+        "name" : "InterprocsTests"
+      }
+    }
+  ],
+  "version" : 1
+}
