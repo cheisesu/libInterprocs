@@ -18,8 +18,8 @@ final class DistributedCommunicatorTests: XCTestCase {
 
     // When communicator (A) sends notification and another communicator (B) receives the notification.
     func test_receivesByAnother() {
-        let communicatorA = DistributedCommunicator(id: "dont_receive_from_self")
-        let communicatorB = DistributedCommunicator(id: "dont_receive_from_self")
+        let communicatorA = DistributedCommunicator(id: "receive_by_another")
+        let communicatorB = DistributedCommunicator(id: "receive_by_another")
         let expect = expectation(description: "When communicator (A) sends notification and another communicator (B) receives the notification.")
         communicatorB.subscribe(on: "test_receivesByAnother", receive: String.self) { obj in
             expect.fulfill()
