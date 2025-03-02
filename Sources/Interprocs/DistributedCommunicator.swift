@@ -1,53 +1,74 @@
 import Foundation
 import Combine
 
+extension DistributedCommunicator {
+    fileprivate struct _TransportMessage<Content: Sendable>: Sendable {
+        let tunnelId: String
+        let sessionId: String
+        let content: Content
+    }
+
+    private enum _Error: Error {
+        case missedTransportMessage
+        case equalSessionId
+        case identifierMismatch
+    }
+}
+
+extension DistributedCommunicator._TransportMessage: Encodable where Content: Encodable {}
+extension DistributedCommunicator._TransportMessage: Decodable where Content: Decodable {}
+
 /// Communicator based on DistributedNotificationCenter.
 ///
 /// - warning: Communications using this way are not secured.
 @available(iOS, unavailable)
+@available(tvOS, unavailable)
 public class DistributedCommunicator {
-    private let id: String
+    private let tunnelId: String
     private let center: DistributedNotificationCenter
     private let encoder: any CommunicatorEncoder
     private let decoder: any CommunicatorDecoder
+    private let signingMethod: SigningMethod?
     private var cancellables: Set<AnyCancellable> = []
-
-    private var notificationObject: String? { id }
-    private var sessionId: String {
-        let id = String(describing: ObjectIdentifier(self)) + self.id
-        let hash = IdHasher(value: id)?.hash ?? String(describing: Unmanaged.passUnretained(self).toOpaque())
-        return hash
-    }
+    private var sessionId: String { IdHasher(value: String(describing: ObjectIdentifier(self)) + tunnelId).stringValue }
 
     /// Initializes communicator.
-    /// - Parameter id: Identiifier used for filterring notifications.
+    /// - Parameter id: Identiifier used for filterring notifications among all.
     /// - Parameter encoder: Encoder for objects to send.
     /// - Parameter decoder: Decoder for receved objects.
-    public init(id: String, encoder: any CommunicatorEncoder = JSONEncoder(), decoder: any CommunicatorDecoder = JSONDecoder()) {
-        self.id = IdHasher(value: id)?.hash ?? id
+    /// - Parameter signingPolicy: Policy of content signing to protect modified events. Default value is ``SigningPolicy/default``.
+    public init(id: String, signingPolicy: SigningPolicy = .default,
+                encoder: any CommunicatorEncoder = JSONEncoder(), decoder: any CommunicatorDecoder = JSONDecoder())
+    {
+        tunnelId = IdHasher(value: id).stringValue
         center = .default()
         self.encoder = encoder
         self.decoder = decoder
+
+        switch signingPolicy {
+        case .none: signingMethod = nil
+        case .default: signingMethod = .default
+        }
     }
 
     /// Sends object with indicated key name.
     /// - Parameters:
-    ///   - object: Instance of an object to send. It will be encoded using passed encoder to initializer.
+    ///   - object: Instance of an object to send. It will be encoded using encoder, passed to initializer.
     ///   - key: Notification name.
     /// - Returns: True if no error happened.
     @discardableResult
-    public func send<Object: Encodable>(_ object: Object, with key: any NotificationKeyType) -> Bool {
+    public func send<Object: Encodable & Sendable>(_ object: Object, with key: any NotificationKeyType) -> Bool {
         do {
-            let data = try encoder.encode(object)
-            let name = notificationName(for: key)
+            let transportMessage = _TransportMessage(tunnelId: tunnelId, sessionId: sessionId, content: object)
+            let signature = try signingMethod?.sign(transportMessage)
+            let data = try encoder.encode(transportMessage)
             var userInfo: [AnyHashable: Any] = [
-                .Key.objectData: data.base64EncodedString(),
-                .Key.id: id,
-                .Key.session: sessionId,
+                .Key.transportMessage: data,
             ]
-            guard let signature = signature(of: userInfo) else { return false }
-            userInfo[.Key.firma] = signature
-            center.postNotificationName(name, object: notificationObject, userInfo: userInfo, deliverImmediately: true)
+            if let signature {
+                userInfo[.Key.firma] = signature
+            }
+            center.postNotificationName(Notification.Name(key.rawValue), object: tunnelId, userInfo: userInfo, deliverImmediately: true)
             return true
         } catch {
             return false
@@ -61,63 +82,46 @@ public class DistributedCommunicator {
     ///   - key: Notification name.
     ///   - type: Type of content object.
     ///   - handler: Handler of received notification.
-    public func subscribe<Object: Decodable>(on key: any NotificationKeyType,
-                                             receive type: Object.Type,
-                                             handler: @escaping (_ obj: Object) -> Void)
+    public func subscribe<Object: Codable & Sendable>(on key: any NotificationKeyType,
+                                                      receive type: Object.Type,
+                                                      handler: @escaping (_ obj: Object) -> Void)
     {
-        let name = notificationName(for: key)
-        center.publisher(for: name, object: notificationObject as NSString?)
+        center.publisher(for: Notification.Name(key.rawValue), object: tunnelId as NSString?)
             .sink { [weak self] notification in
                 guard let self else { return }
-                let userInfo = notification.userInfo ?? [:]
-                guard let id = userInfo[.Key.id] as? String, id == self.id else { return }
-                guard let session = userInfo[.Key.session] as? String else { return }
-                guard session != self.sessionId else { return }
-                guard let objectBase64 = userInfo[.Key.objectData] as? String else { return }
-                guard let objectData = Data(base64Encoded: objectBase64) else { return }
-                guard let inSignature = userInfo[.Key.firma] as? String else { return }
-                guard let signature = signature(ofId: id, sessionId: session, objectBase64: objectBase64) else { return }
-                guard inSignature == signature else { return }
-
                 do {
-                    let obj = try decoder.decode(Object.self, from: objectData)
-                    handler(obj)
-                } catch {
-                }
+                    let object: Object = try self.handle(notification)
+                    handler(object)
+                } catch {}
             }
             .store(in: &cancellables)
     }
 
-    private func notificationName(for key: any NotificationKeyType) -> Notification.Name {
-        Notification.Name("\(id).\(key.rawValue)")
+    private func handle<Object: Codable & Sendable>(_ notification: Notification) throws -> Object {
+        let (message, signature) = try parse(notification, for: Object.self)
+        try validate(message, signature: signature)
+        return message.content
     }
 
-    private func decode(userInfo: [AnyHashable: Any]) -> String? {
-        guard let data = try? JSONSerialization.data(withJSONObject: userInfo, options: [.sortedKeys, .prettyPrinted]) else { return nil }
-        let result = String(data: data, encoding: .utf8)
-        return result
+    private func parse<Object: Codable & Sendable>(_ notification: Notification,
+                                                   for objectType: Object.Type) throws -> (_TransportMessage<Object>, Data?)
+    {
+        guard let messageData = notification.userInfo?[.Key.transportMessage] as? Data else { throw _Error.missedTransportMessage }
+        let message = try decoder.decode(_TransportMessage<Object>.self, from: messageData)
+        let firma = notification.userInfo?[.Key.firma] as? Data
+        return (message, firma)
     }
 
-    private func signature(of userInfo: [AnyHashable: Any]) -> String? {
-        guard let string = decode(userInfo: userInfo) else { return nil }
-        return IdHasher(value: string)?.hash
-    }
-
-    private func signature(ofId id: String, sessionId: String, objectBase64: String) -> String? {
-        let userInfo: [AnyHashable: Any] = [
-            .Key.id: id,
-            .Key.objectData: objectBase64,
-            .Key.session: sessionId,
-        ]
-        return signature(of: userInfo)
+    private func validate<Object: Codable & Sendable>(_ message: _TransportMessage<Object>, signature: Data?) throws {
+        try signingMethod?.validate(message, with: signature)
+        guard sessionId != message.sessionId else { throw _Error.equalSessionId }
+        guard message.tunnelId == tunnelId else { throw _Error.identifierMismatch }
     }
 }
 
 private extension AnyHashable {
     enum Key {
-        static let id: String = "center_id"
-        static let objectData: String = "object_data"
-        static let session: String = "session"
+        static let transportMessage: String = "transport_message"
         static let firma: String = "firma"
     }
 }
