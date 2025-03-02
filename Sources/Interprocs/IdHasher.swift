@@ -2,14 +2,18 @@ import Foundation
 import CryptoKit
 
 struct IdHasher {
-    let hash: String
+    let data: Data
+    let stringValue: String
 
-    init?(value: String, encoding: String.Encoding = .utf8) {
-        guard let data = value.data(using: encoding) else { return nil }
+    init(value: String) {
+        self.init(data: Data(value.utf8))
+    }
+
+    init(data: Data) {
         var sha = SHA256()
         sha.update(data: data)
-        let digest = sha.finalize()
-        let digestData = Data(digest)
-        hash = digestData.base64EncodedString()
+        let hashData = Data(sha.finalize())
+        self.data = Data(hashData)
+        stringValue = self.data.base64EncodedString()
     }
 }
