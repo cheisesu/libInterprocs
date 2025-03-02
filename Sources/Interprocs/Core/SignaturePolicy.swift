@@ -1,7 +1,10 @@
 import Foundation
 
+/// Policy applied to signing of notification messages.
 public enum SigningPolicy: Sendable {
+    /// No policy used.
     case none
+    /// Default policy used.
     case `default`
 }
 
