@@ -1,11 +1,16 @@
 import Foundation
 import Combine
 
+// TODO: Add tests for receiver address
+// TODO: Add tests for subscribe source address
+// TODO: Add tests for both situations
+
 extension DistributedCommunicator {
     struct _TransportPacket<Content: Sendable>: Sendable {
         struct _TransportMessage: Sendable {
             let tunnelId: String
             let src: String
+            let dst: String?
             let content: Content
         }
 
@@ -18,6 +23,7 @@ extension DistributedCommunicator {
         case equalSourceAddress
         case identifierMismatch
         case unexpetedSourceAddress
+        case wrongReceiverAddress
     }
 }
 
@@ -72,12 +78,14 @@ public class DistributedCommunicator: @unchecked Sendable {
     /// Sends object with indicated key name.
     /// - Parameters:
     ///   - object: Instance of an object to send. It will be encoded using encoder, passed to initializer.
+    ///   - destination: Destination address of message..
     ///   - key: Notification name.
     /// - Returns: True if no error happened.
     @discardableResult
-    public func send<Object: Encodable & Sendable>(_ object: Object, with key: any NotificationKeyType) -> Bool {
+    public func send<Object: Encodable & Sendable>(_ object: Object, to destination: String? = nil, with key: any NotificationKeyType) -> Bool {
         do {
-            let transportMessage = _TransportPacket._TransportMessage(tunnelId: tunnelId, src: address, content: object)
+            let transportMessage = _TransportPacket._TransportMessage(tunnelId: tunnelId, src: self.address, dst: destination,
+                                                                      content: object)
             let signature = try signingMethod?.sign(transportMessage)
             let packet = _TransportPacket(message: transportMessage, firma: signature)
             let data = try encoder.encode(packet)
@@ -115,6 +123,7 @@ public class DistributedCommunicator: @unchecked Sendable {
                         handler(object)
                     } catch _Error.equalSourceAddress {
                     } catch _Error.unexpetedSourceAddress {
+                    } catch _Error.wrongReceiverAddress {
                     } catch {}
                 }
                 .store(in: &cancellables)
@@ -141,6 +150,9 @@ public class DistributedCommunicator: @unchecked Sendable {
         guard packet.message.src != self.address else { throw _Error.equalSourceAddress }
         if let address {
             guard packet.message.src == address else { throw _Error.unexpetedSourceAddress }
+        }
+        if let dst = packet.message.dst {
+            guard dst == self.address else { throw _Error.wrongReceiverAddress }
         }
     }
 }

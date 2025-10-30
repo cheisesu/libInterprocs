@@ -61,7 +61,7 @@ final class DistributedCommunicatorTests: XCTestCase {
         let tunnelId = IdHasher(value: "original_received").stringValue
         let message = "hello"
         let messageJSON = #"{"content":""# + message + #"","src":""# + address + #"","tunnelId":""# + tunnelId + #""}"#
-        let _packageMessage = DistributedCommunicator._TransportPacket<String>._TransportMessage(tunnelId: tunnelId, src: address, content: message)
+        let _packageMessage = DistributedCommunicator._TransportPacket<String>._TransportMessage(tunnelId: tunnelId, src: address, dst: nil, content: message)
         let firma = try DefaultSigningMethod().sign(_packageMessage).base64EncodedString()
         let packetJSON = #"{"firma":""# + firma + #"","message":"# + messageJSON + #"}"#
 
