@@ -2,10 +2,15 @@ import Foundation
 import Combine
 
 extension DistributedCommunicator {
-    fileprivate struct _TransportMessage<Content: Sendable>: Sendable {
-        let tunnelId: String
-        let src: String
-        let content: Content
+    struct _TransportPacket<Content: Sendable>: Sendable {
+        struct _TransportMessage: Sendable {
+            let tunnelId: String
+            let src: String
+            let content: Content
+        }
+
+        let message: _TransportMessage
+        let firma: Data?
     }
 
     private enum _Error: Error {
@@ -15,8 +20,10 @@ extension DistributedCommunicator {
     }
 }
 
-extension DistributedCommunicator._TransportMessage: Encodable where Content: Encodable {}
-extension DistributedCommunicator._TransportMessage: Decodable where Content: Decodable {}
+extension DistributedCommunicator._TransportPacket: Encodable where Content: Encodable {}
+extension DistributedCommunicator._TransportPacket: Decodable where Content: Decodable {}
+extension DistributedCommunicator._TransportPacket._TransportMessage: Encodable where Content: Encodable {}
+extension DistributedCommunicator._TransportPacket._TransportMessage: Decodable where Content: Decodable {}
 
 /// Communicator based on DistributedNotificationCenter.
 ///
@@ -69,15 +76,13 @@ public class DistributedCommunicator: @unchecked Sendable {
     @discardableResult
     public func send<Object: Encodable & Sendable>(_ object: Object, with key: any NotificationKeyType) -> Bool {
         do {
-            let transportMessage = _TransportMessage(tunnelId: tunnelId, src: address, content: object)
+            let transportMessage = _TransportPacket._TransportMessage(tunnelId: tunnelId, src: address, content: object)
             let signature = try signingMethod?.sign(transportMessage)
-            let data = try encoder.encode(transportMessage)
-            var userInfo: [AnyHashable: Any] = [
-                .Key.transportMessage: data,
+            let packet = _TransportPacket(message: transportMessage, firma: signature)
+            let data = try encoder.encode(packet)
+            let userInfo: [AnyHashable: Any] = [
+                .Key.transportPacket: data,
             ]
-            if let signature {
-                userInfo[.Key.firma] = signature
-            }
             center.postNotificationName(Notification.Name(key.rawValue), object: tunnelId, userInfo: userInfo, deliverImmediately: true)
             return true
         } catch {
@@ -112,30 +117,28 @@ public class DistributedCommunicator: @unchecked Sendable {
     }
 
     private func handle<Object: Codable & Sendable>(_ notification: Notification) throws -> Object {
-        let (message, signature) = try parse(notification, for: Object.self)
-        try validate(message, signature: signature)
-        return message.content
+        let packet = try parse(notification, for: Object.self)
+        try validate(packet)
+        return packet.message.content
     }
 
     private func parse<Object: Codable & Sendable>(_ notification: Notification,
-                                                   for objectType: Object.Type) throws -> (_TransportMessage<Object>, Data?)
+                                                   for objectType: Object.Type) throws -> _TransportPacket<Object>
     {
-        guard let messageData = notification.userInfo?[.Key.transportMessage] as? Data else { throw _Error.missedTransportMessage }
-        let message = try decoder.decode(_TransportMessage<Object>.self, from: messageData)
-        let firma = notification.userInfo?[.Key.firma] as? Data
-        return (message, firma)
+        guard let packetData = notification.userInfo?[.Key.transportPacket] as? Data else { throw _Error.missedTransportMessage }
+        let packet = try decoder.decode(_TransportPacket<Object>.self, from: packetData)
+        return packet
     }
 
-    private func validate<Object: Codable & Sendable>(_ message: _TransportMessage<Object>, signature: Data?) throws {
-        try signingMethod?.validate(message, with: signature)
-        guard message.tunnelId == tunnelId else { throw _Error.identifierMismatch }
-        guard message.src != self.address else { throw _Error.equalSourceAddress }
+    private func validate<Object: Codable & Sendable>(_ packet: _TransportPacket<Object>) throws {
+        try signingMethod?.validate(packet.message, with: packet.firma)
+        guard packet.message.tunnelId == tunnelId else { throw _Error.identifierMismatch }
+        guard packet.message.src != self.address else { throw _Error.equalSourceAddress }
     }
 }
 
 private extension AnyHashable {
     enum Key {
-        static let transportMessage: String = "transport_message"
-        static let firma: String = "firma"
+        static let transportPacket: String = "transport_packet"
     }
 }
