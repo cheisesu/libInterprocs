@@ -34,6 +34,7 @@ public class DistributedCommunicator: @unchecked Sendable {
     private var cancellables: Set<AnyCancellable> = []
     /// Hashed address of the instance. To identify nodes of communicator.
     private let address: String
+    private let delegateQueue: DispatchQueue
 
     /// Initializes communicator.
     /// - Parameter id: Identiifier used for filterring notifications among all.
@@ -41,8 +42,10 @@ public class DistributedCommunicator: @unchecked Sendable {
     /// - Parameter decoder: Decoder for receved objects.
     /// - Parameter signingPolicy: Policy of content signing to protect modified events. Default value is ``SigningPolicy/default``.
     /// - Parameter address: Address of the instance. To identify nodes of communicator.
+    /// - Parameter delegateQueue: Queue for subscribe callbacks. Default is main.
     public init(id: String, address: String, signingPolicy: SigningPolicy = .default,
-                encoder: any CommunicatorEncoder = JSONEncoder(), decoder: any CommunicatorDecoder = JSONDecoder())
+                encoder: any CommunicatorEncoder = JSONEncoder(), decoder: any CommunicatorDecoder = JSONDecoder(),
+                delegateQueue: DispatchQueue = .main)
     {
         tunnelId = IdHasher(value: id).stringValue
         center = .default()
@@ -55,6 +58,7 @@ public class DistributedCommunicator: @unchecked Sendable {
         }
         self.address = IdHasher(value: address).stringValue
         synchingQueue = .distributedSync
+        self.delegateQueue = delegateQueue
     }
 
     /// Sends object with indicated key name.
@@ -95,6 +99,7 @@ public class DistributedCommunicator: @unchecked Sendable {
         synchingQueue.sync {
             center
                 .publisher(for: Notification.Name(key.rawValue), object: tunnelId as NSString?)
+                .receive(on: delegateQueue)
                 .sink { [weak self] notification in
                     guard let self else { return }
                     do {
