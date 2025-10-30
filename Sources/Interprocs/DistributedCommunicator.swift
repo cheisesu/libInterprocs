@@ -23,7 +23,9 @@ extension DistributedCommunicator._TransportMessage: Decodable where Content: De
 /// - warning: Communications using this way are not secured.
 @available(iOS, unavailable)
 @available(tvOS, unavailable)
-public class DistributedCommunicator {
+public class DistributedCommunicator: @unchecked Sendable {
+    private let synchingQueue: DispatchQueue
+    /// Hashed identiifier used for filterring notifications among all.
     private let tunnelId: String
     private let center: DistributedNotificationCenter
     private let encoder: any CommunicatorEncoder
@@ -52,6 +54,7 @@ public class DistributedCommunicator {
         case .default: signingMethod = .default
         }
         self.address = IdHasher(value: address).stringValue
+        synchingQueue = .distributedSync
     }
 
     /// Sends object with indicated key name.
@@ -89,15 +92,18 @@ public class DistributedCommunicator {
                                                       receive type: Object.Type,
                                                       handler: @escaping (_ obj: Object) -> Void)
     {
-        center.publisher(for: Notification.Name(key.rawValue), object: tunnelId as NSString?)
-            .sink { [weak self] notification in
-                guard let self else { return }
-                do {
-                    let object: Object = try self.handle(notification)
-                    handler(object)
-                } catch {}
-            }
-            .store(in: &cancellables)
+        synchingQueue.sync {
+            center
+                .publisher(for: Notification.Name(key.rawValue), object: tunnelId as NSString?)
+                .sink { [weak self] notification in
+                    guard let self else { return }
+                    do {
+                        let object: Object = try self.handle(notification)
+                        handler(object)
+                    } catch {}
+                }
+                .store(in: &cancellables)
+        }
     }
 
     private func handle<Object: Codable & Sendable>(_ notification: Notification) throws -> Object {
