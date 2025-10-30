@@ -1,6 +1,7 @@
 import Foundation
 import CryptoKit
 
+/// Entity that describes identifier of communications.
 struct IdHasher {
     let data: Data
     let stringValue: String

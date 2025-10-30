@@ -4,13 +4,13 @@ import Combine
 extension DistributedCommunicator {
     fileprivate struct _TransportMessage<Content: Sendable>: Sendable {
         let tunnelId: String
-        let sessionId: String
+        let src: String
         let content: Content
     }
 
     private enum _Error: Error {
         case missedTransportMessage
-        case equalSessionId
+        case equalSourceAddress
         case identifierMismatch
     }
 }
@@ -30,14 +30,16 @@ public class DistributedCommunicator {
     private let decoder: any CommunicatorDecoder
     private let signingMethod: SigningMethod?
     private var cancellables: Set<AnyCancellable> = []
-    private var sessionId: String { IdHasher(value: String(describing: ObjectIdentifier(self)) + tunnelId).stringValue }
+    /// Hashed address of the instance. To identify nodes of communicator.
+    private let address: String
 
     /// Initializes communicator.
     /// - Parameter id: Identiifier used for filterring notifications among all.
     /// - Parameter encoder: Encoder for objects to send.
     /// - Parameter decoder: Decoder for receved objects.
     /// - Parameter signingPolicy: Policy of content signing to protect modified events. Default value is ``SigningPolicy/default``.
-    public init(id: String, signingPolicy: SigningPolicy = .default,
+    /// - Parameter address: Address of the instance. To identify nodes of communicator.
+    public init(id: String, address: String, signingPolicy: SigningPolicy = .default,
                 encoder: any CommunicatorEncoder = JSONEncoder(), decoder: any CommunicatorDecoder = JSONDecoder())
     {
         tunnelId = IdHasher(value: id).stringValue
@@ -49,6 +51,7 @@ public class DistributedCommunicator {
         case .none: signingMethod = nil
         case .default: signingMethod = .default
         }
+        self.address = IdHasher(value: address).stringValue
     }
 
     /// Sends object with indicated key name.
@@ -59,7 +62,7 @@ public class DistributedCommunicator {
     @discardableResult
     public func send<Object: Encodable & Sendable>(_ object: Object, with key: any NotificationKeyType) -> Bool {
         do {
-            let transportMessage = _TransportMessage(tunnelId: tunnelId, sessionId: sessionId, content: object)
+            let transportMessage = _TransportMessage(tunnelId: tunnelId, src: address, content: object)
             let signature = try signingMethod?.sign(transportMessage)
             let data = try encoder.encode(transportMessage)
             var userInfo: [AnyHashable: Any] = [
@@ -114,8 +117,8 @@ public class DistributedCommunicator {
 
     private func validate<Object: Codable & Sendable>(_ message: _TransportMessage<Object>, signature: Data?) throws {
         try signingMethod?.validate(message, with: signature)
-        guard sessionId != message.sessionId else { throw _Error.equalSessionId }
         guard message.tunnelId == tunnelId else { throw _Error.identifierMismatch }
+        guard message.src != self.address else { throw _Error.equalSourceAddress }
     }
 }
 
