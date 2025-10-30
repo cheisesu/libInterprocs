@@ -17,6 +17,7 @@ extension DistributedCommunicator {
         case missedTransportMessage
         case equalSourceAddress
         case identifierMismatch
+        case unexpetedSourceAddress
     }
 }
 
@@ -97,8 +98,10 @@ public class DistributedCommunicator: @unchecked Sendable {
     ///   - key: Notification name.
     ///   - type: Type of content object.
     ///   - handler: Handler of received notification.
+    ///   - address: Address of source, from a message is expected.
     public func subscribe<Object: Codable & Sendable>(on key: any NotificationKeyType,
                                                       receive type: Object.Type,
+                                                      from address: String? = nil,
                                                       handler: @escaping (_ obj: Object) -> Void)
     {
         synchingQueue.sync {
@@ -108,17 +111,19 @@ public class DistributedCommunicator: @unchecked Sendable {
                 .sink { [weak self] notification in
                     guard let self else { return }
                     do {
-                        let object: Object = try self.handle(notification)
+                        let object: Object = try self.handle(notification, from: address)
                         handler(object)
+                    } catch _Error.equalSourceAddress {
+                    } catch _Error.unexpetedSourceAddress {
                     } catch {}
                 }
                 .store(in: &cancellables)
         }
     }
 
-    private func handle<Object: Codable & Sendable>(_ notification: Notification) throws -> Object {
+    private func handle<Object: Codable & Sendable>(_ notification: Notification, from address: String?) throws -> Object {
         let packet = try parse(notification, for: Object.self)
-        try validate(packet)
+        try validate(packet, from: address)
         return packet.message.content
     }
 
@@ -130,10 +135,13 @@ public class DistributedCommunicator: @unchecked Sendable {
         return packet
     }
 
-    private func validate<Object: Codable & Sendable>(_ packet: _TransportPacket<Object>) throws {
+    private func validate<Object: Codable & Sendable>(_ packet: _TransportPacket<Object>, from address: String?) throws {
         try signingMethod?.validate(packet.message, with: packet.firma)
         guard packet.message.tunnelId == tunnelId else { throw _Error.identifierMismatch }
         guard packet.message.src != self.address else { throw _Error.equalSourceAddress }
+        if let address {
+            guard packet.message.src == address else { throw _Error.unexpetedSourceAddress }
+        }
     }
 }
 
