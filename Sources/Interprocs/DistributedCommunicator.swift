@@ -1,10 +1,6 @@
 import Foundation
 import Combine
 
-// TODO: Add tests for receiver address
-// TODO: Add tests for subscribe source address
-// TODO: Add tests for both situations
-
 extension DistributedCommunicator {
     struct _TransportPacket<Content: Sendable>: Sendable {
         struct _TransportMessage: Sendable {
@@ -84,6 +80,7 @@ public class DistributedCommunicator: @unchecked Sendable {
     @discardableResult
     public func send<Object: Encodable & Sendable>(_ object: Object, to destination: String? = nil, with key: any NotificationKeyType) -> Bool {
         do {
+            let destination: String? = if let destination { IdHasher(value: destination).stringValue } else { nil }
             let transportMessage = _TransportPacket._TransportMessage(tunnelId: tunnelId, src: self.address, dst: destination,
                                                                       content: object)
             let signature = try signingMethod?.sign(transportMessage)
@@ -145,6 +142,7 @@ public class DistributedCommunicator: @unchecked Sendable {
     }
 
     private func validate<Object: Codable & Sendable>(_ packet: _TransportPacket<Object>, from address: String?) throws {
+        let address: String? = if let address { IdHasher(value: address).stringValue } else { nil }
         try signingMethod?.validate(packet.message, with: packet.firma)
         guard packet.message.tunnelId == tunnelId else { throw _Error.identifierMismatch }
         guard packet.message.src != self.address else { throw _Error.equalSourceAddress }
